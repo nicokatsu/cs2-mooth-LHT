@@ -2,6 +2,7 @@
 using Colossal.Logging;
 using Colossal.Serialization.Entities;
 using Game;
+using Game.City;
 using Game.Prefabs;
 using Unity.Collections;
 using Unity.Entities;
@@ -11,7 +12,9 @@ namespace SmoothLHT.Systems
     public partial class InvertPrefabLHT : GameSystemBase
     {
         private PrefabSystem prefabSystem;
+        private CityConfigurationSystem cityConfigurationSystem;
         private EntityQuery allAssets;
+        private bool isAllInverted;
 
         private static string[] ASSETS_PREFIX_NOT_INVERTED =
         {
@@ -32,6 +35,7 @@ namespace SmoothLHT.Systems
             base.OnCreate();
             log.Info($"Initializing {nameof(InvertPrefabLHT)}");
             prefabSystem = World.GetOrCreateSystemManaged<PrefabSystem>();
+            cityConfigurationSystem = World.GetOrCreateSystemManaged<CityConfigurationSystem>();
             allAssets = SystemAPI.QueryBuilder().WithAllRW<PrefabData>().Build();
         }
 
@@ -41,31 +45,26 @@ namespace SmoothLHT.Systems
 
         protected override void OnGamePreload(Purpose purpose, GameMode mode)
         {
+            base.OnGamePreload(purpose, mode);
+            if (!cityConfigurationSystem.leftHandTraffic || isAllInverted) return;
             var allAssetEntities = allAssets.ToEntityArray(Allocator.Temp);
             log.Info($"Loaded {allAssetEntities.Length} assets");
             foreach (var entity in allAssetEntities)
             {
-                prefabSystem.TryGetPrefab(entity, out PrefabBase prefab);
-                if (prefab is BuildingPrefab or BuildingExtensionPrefab)
-                {
-                    if (ASSETS_PREFIX_NOT_INVERTED.Any(prefix => prefab.name.StartsWith(prefix)))
-                    {
-                        continue;
-                    }
+                if (!prefabSystem.TryGetPrefab(entity, out PrefabBase prefab) ||
+                    prefab is not (BuildingPrefab or BuildingExtensionPrefab) ||
+                    ASSETS_PREFIX_NOT_INVERTED.Any(prefab.name.StartsWith) ||
+                    !prefab.TryGet(out ObjectSubNets subNets) ||
+                    subNets is null ||
+                    subNets.m_InvertWhen.Equals(NetInvertMode.LefthandTraffic)
+                   ) continue;
 
-                    prefab.TryGet(out ObjectSubNets subNets);
-                    if (subNets is null)
-                    {
-                        continue;
-                    }
-
-                    subNets.m_InvertWhen = NetInvertMode.LefthandTraffic;
-                    prefabSystem.UpdatePrefab(prefab);
-                    log.Info($"Inverted {prefab.name}");
-                }
+                subNets.m_InvertWhen = NetInvertMode.LefthandTraffic;
+                prefabSystem.UpdatePrefab(prefab);
+                log.Info($"Inverted {prefab.name}");
             }
 
-            base.OnGameLoadingComplete(purpose, mode);
+            isAllInverted = true;
         }
     }
 }
